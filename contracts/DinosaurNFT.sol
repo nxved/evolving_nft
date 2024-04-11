@@ -22,6 +22,9 @@ contract DinosaurNFT is
     uint256 private _nextTokenId;
     IERC20 EGGtoken;
     uint256 feedAmount = 100e18;
+    uint256 basePower = 100;
+    uint256 upgradeBasePower = 500;
+    uint256 minPowerToUpgrade = 300;
 
     struct Dinosaur {
         string name;
@@ -46,6 +49,12 @@ contract DinosaurNFT is
         string name,
         uint256 powerLevel
     );
+
+    event DinosaurUpgraded(
+        uint256 indexed tokenID,
+        string name,
+        uint256 powerLevel
+    );
     event DinosaurFed(
         uint256 indexed tokenID,
         string name,
@@ -63,8 +72,8 @@ contract DinosaurNFT is
         string memory randomName = dinosaurNames[
             randomNumber % dinosaurNames.length
         ];
-        dinosaurs[_nextTokenId] = Dinosaur(randomName, 0);
-        emit DinosaurMinted(_nextTokenId, randomName, 0);
+        dinosaurs[_nextTokenId] = Dinosaur(randomName, basePower);
+        emit DinosaurMinted(_nextTokenId, randomName, basePower);
         _safeMint(_msgSender(), _nextTokenId);
         _nextTokenId++;
     }
@@ -79,7 +88,7 @@ contract DinosaurNFT is
             "Insufficient balance to FEED"
         );
 
-        EGGtoken.burnFrom(_msgSender(), feedAmount);
+        EGGtoken.transferFrom(_msgSender(), address(this), feedAmount);
 
         dinosaurs[_tokenId].powerLevel += 100;
         emit DinosaurFed(
@@ -87,6 +96,27 @@ contract DinosaurNFT is
             dinosaurs[_tokenId].name,
             dinosaurs[_tokenId].powerLevel
         );
+    }
+
+    function upgradeDinosaur(uint256 _tokenId) external {
+        require(
+            ownerOf(_tokenId) == _msgSender(),
+            "You can only upgrade dinosaurs you own"
+        );
+        require(
+            dinosaurs[_tokenId].powerLevel >= minPowerToUpgrade,
+            "You should have threshold power to upgrade"
+        );
+        _burn(_tokenId);
+
+        uint256 randomNumber = _random(_msgSender());
+        string memory randomName = dinosaurNames[
+            randomNumber % dinosaurNames.length
+        ];
+        dinosaurs[_nextTokenId] = Dinosaur(randomName, upgradeBasePower);
+        emit DinosaurUpgraded(_nextTokenId, randomName, upgradeBasePower);
+        _safeMint(_msgSender(), _nextTokenId);
+        _nextTokenId++;
     }
 
     function pause() public onlyOwner {
@@ -140,6 +170,7 @@ contract DinosaurNFT is
         super._increaseBalance(account, value);
     }
 
+    //onchain metadata is used
     function tokenURI(
         uint256 tokenId
     ) public view override(ERC721, ERC721URIStorage) returns (string memory) {
