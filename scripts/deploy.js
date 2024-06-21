@@ -1,14 +1,14 @@
 const hre = require("hardhat");
 const { ethers, defender } = require("hardhat");
+const { Verify } = require("../verifyfunc");
 
 async function main() {
-  const Factory = await ethers.getContractFactory("NFTBatchBurn");
-  const factory = await Factory.deploy(
-    "0x3EC991C2417e3FC22a2783Bf1e3D63cD4200fEF6"
-  );
+  const Factory = await ethers.getContractFactory("XGKHAN");
+  const factory = await Factory.deploy();
   await factory.waitForDeployment();
 
   console.log(`factory deployed to ${factory.target}`);
+  await Verify(factory.target);
 }
 main().catch((error) => {
   console.error(error);

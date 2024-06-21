@@ -31,14 +31,16 @@ contract GKHAN is ERC20, ERC20Burnable, ERC20Pausable, AccessControl {
 
     bool public isLowDemandPeriod = true;
     bool private sending;
+    uint256 private swapTokensAtAmount = 1000 ether;
+    bool private swapping;
 
     address public feesPool = 0xDb3360F0a406Aa9fBbBd332Fdf64ADb688e9a769;
-    address public usdt = 0xDb3360F0a406Aa9fBbBd332Fdf64ADb688e9a769;
+    address public usdt = 0x9fbAb0ac59180b3864da9a1c6E480F5Cc228991c;
 
     IUniswapV2Router02 public uniswapV2Router;
     address public uniswapV2Pair;
 
-    constructor(address[3] memory addrs) ERC20("GKHAN", "GKHAN") {
+    constructor() ERC20("GKHAN", "GKHAN") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
         _grantRole(DEMAND_ROLE, msg.sender);
@@ -46,10 +48,12 @@ contract GKHAN is ERC20, ERC20Burnable, ERC20Pausable, AccessControl {
 
         nextBuyBack = block.timestamp + buyBackPeriod;
 
-        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(addrs[1]);
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(
+            0xD99D1c33F9fC3444f8101754aBC46c52416550D1
+        );
         // Create a uniswap pair for this new token
         address _uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory())
-            .createPair(address(this), _uniswapV2Router.WETH());
+            .createPair(address(this), usdt);
         uniswapV2Router = _uniswapV2Router;
         uniswapV2Pair = _uniswapV2Pair;
         _setAutomatedMarketMakerPair(_uniswapV2Pair, true);
@@ -93,41 +97,125 @@ contract GKHAN is ERC20, ERC20Burnable, ERC20Pausable, AccessControl {
         return fee;
     }
 
-    function _transfer(
-        address from,
-        address to,
-        uint256 amount
-    ) internal override {
-        require(from != address(0), "ERC20: transfer from the zero address");
-        require(to != address(0), "ERC20: transfer to the zero address");
+    // function swapSingleHopExactAmountInUSDT(uint256 amountIn) external {
+    //     address[] memory path;
+    //     path = new address[](2);
+    //     path[0] = address(this);
+    //     path[1] = usdt;
 
+    //     uint256[] memory amounts = router.swapExactTokensForTokens(
+    //         amountIn,
+    //         0,
+    //         path,
+    //         msg.sender,
+    //         block.timestamp
+    //     );
+
+    //     // amounts[0] = WETH amount, amounts[1] = DAI amount
+    //     // return amounts[1];
+    // }
+    // function swapSingleHopExactAmountInGKHAN(uint256 amountIn) external {
+    //     address[] memory path;
+    //     path = new address[](2);
+    //     path[0] = usdt;
+    //     path[1] = address(this);
+
+    //     weth.approve(address(router), amountInMax);
+
+    //     uint256[] memory amounts = router.swapExactTokensForTokens(
+    //         amountIn,
+    //         0,
+    //         path,
+    //         msg.sender,
+    //         block.timestamp
+    //     );
+
+    //     // amounts[0] = WETH amount, amounts[1] = DAI amount
+    //     // return amounts[1];
+    // }
+
+    function swapTokensForUSDT(uint256 tokenAmount) public {
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = usdt;
+
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+
+        // make the swap
+        uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0,
+            path,
+            address(this),
+            block.timestamp
+        );
+    }
+
+    function swapTokensForGKHAN(uint256 tokenAmount) public {
+        address[] memory path = new address[](2);
+        path[0] = usdt;
+        path[1] = address(this);
+
+        IERC20(usdt).approve(address(uniswapV2Router), tokenAmount);
+
+        // make the swap
+        uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0,
+            path,
+            address(this),
+            block.timestamp
+        );
+    }
+
+    function _beforeUpdate(address from, address to, uint256 amount) internal {
         if (amount == 0) {
-            super._transfer(from, to, 0);
+            super._update(from, to, 0);
             return;
         }
 
         uint256 contractTokenBalance = balanceOf(address(this));
+        bool canSwap = contractTokenBalance >= swapTokensAtAmount;
+        bool ownerFrom = hasRole(DEFAULT_ADMIN_ROLE, from);
+        bool ownerTo = hasRole(DEFAULT_ADMIN_ROLE, to);
+
+        if (
+            canSwap &&
+            !swapping &&
+            !automatedMarketMakerPairs[from] &&
+            !ownerFrom &&
+            !ownerTo
+        ) {
+            swapping = true;
+            swapTokensForUSDT(contractTokenBalance);
+            swapping = false;
+        }
+
+        uint256 usdtBalance = IERC20(usdt).balanceOf(address(this));
 
         bool canBurnAndSend = block.timestamp > nextBuyBack;
 
         if (
             canBurnAndSend &&
             !sending &&
+            !swapping &&
             !automatedMarketMakerPairs[from] &&
-            contractTokenBalance > 0
+            usdtBalance > 0 &&
+            !ownerFrom &&
+            !ownerTo
         ) {
             sending = true;
-            (uint256 buybackFee, uint256 feePool) = calculateFee(
-                contractTokenBalance
-            );
+            (uint256 buybackFee, uint256 feePool) = calculateFee(usdtBalance);
 
             if (buybackFee > 0) {
-                _burn(address(this), buybackFee);
-                emit Buyback(buybackFee);
+                swapTokensForGKHAN(buybackFee);
+                uint256 buyBackGKHAN = balanceOf(address(this));
+                _burn(address(this), buyBackGKHAN);
+                emit Buyback(buyBackGKHAN);
             }
 
             if (feePool > 0) {
-                super._transfer(address(this), feesPool, feePool);
+                IERC20(usdt).transfer(feesPool, feePool);
                 emit FeesSentToPool(feePool);
             }
         }
@@ -144,11 +232,11 @@ contract GKHAN is ERC20, ERC20Burnable, ERC20Pausable, AccessControl {
             amount = amount - fees;
 
             if (fees > 0) {
-                super._transfer(from, address(this), fees);
+                super._update(from, address(this), fees);
             }
         }
 
-        super._transfer(from, to, amount);
+        super._update(from, to, amount);
     }
 
     function isExcludedFromFees(address account) public view returns (bool) {
@@ -261,6 +349,6 @@ contract GKHAN is ERC20, ERC20Burnable, ERC20Pausable, AccessControl {
         address to,
         uint256 value
     ) internal override(ERC20, ERC20Pausable) {
-        super._update(from, to, value);
+        _beforeUpdate(from, to, value);
     }
 }

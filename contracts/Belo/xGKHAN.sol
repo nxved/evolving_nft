@@ -8,7 +8,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Pausable.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "./IERC20.sol";
 
 contract XGKHAN is
     ERC20,
@@ -21,25 +21,30 @@ contract XGKHAN is
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
-    IERC20 public gkhanToken;
+    IERC20custom public gkhanToken;
 
-    mapping(address => uint256) public stakedBalance;
-    mapping(address => uint256) public stakingStartTime;
+    struct Stake {
+        uint256 amount;
+        uint256 startTime;
+        bool unstaked;
+    }
 
-    event Staked(address indexed user, uint256 amount);
-    event Unstaked(address indexed user, uint256 amount);
+    mapping(address => Stake[]) public stakes;
 
-    constructor(
-        address defaultAdmin,
-        address pauser,
-        address minter,
-        address gkhanTokenAddress
-    ) ERC20("xGKHAN", "xGKHAN") ERC20Permit("xGKHAN") {
-        _grantRole(DEFAULT_ADMIN_ROLE, defaultAdmin);
-        _grantRole(PAUSER_ROLE, pauser);
-        _grantRole(MINTER_ROLE, minter);
+    event Staked(address indexed user, uint256 amount, uint256 index);
+    event Unstaked(
+        address indexed user,
+        uint256 amount,
+        uint256 burnAmount,
+        uint256 index
+    );
 
-        gkhanToken = IERC20(gkhanTokenAddress);
+    constructor() ERC20("xGKHAN", "xGKHAN") ERC20Permit("xGKHAN") {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(PAUSER_ROLE, msg.sender);
+        _grantRole(MINTER_ROLE, msg.sender);
+
+        gkhanToken = IERC20custom(0x9fbAb0ac59180b3864da9a1c6E480F5Cc228991c);
     }
 
     function pause() public onlyRole(PAUSER_ROLE) {
@@ -61,23 +66,42 @@ contract XGKHAN is
 
         _mint(msg.sender, amount);
 
-        stakedBalance[msg.sender] += amount;
-        stakingStartTime[msg.sender] = block.timestamp;
+        stakes[msg.sender].push(
+            Stake({amount: amount, startTime: block.timestamp, unstaked: false})
+        );
 
-        emit Staked(msg.sender, amount);
+        emit Staked(msg.sender, amount, stakes[msg.sender].length - 1);
     }
 
-    function unstake(uint256 amount) external {
-        require(amount > 0, "Cannot unstake 0 tokens");
-        require(balanceOf(msg.sender) >= amount, "Insufficient staked balance");
+    function unstake(uint256 index) external {
+        require(index < stakes[msg.sender].length, "Invalid stake index");
+        Stake storage userStake = stakes[msg.sender][index];
+        require(!userStake.unstaked, "Already unstaked");
 
-        _burn(msg.sender, amount);
+        uint256 stakedTime = block.timestamp - userStake.startTime;
+        require(stakedTime >= 10 seconds, "Minimum staking period is 10 days");
 
-        gkhanToken.transfer(msg.sender, amount);
+        uint256 burnPercentage;
+        if (stakedTime >= 180 seconds) {
+            // After 180 days, burn 2%
+            burnPercentage = 2;
+        } else {
+            burnPercentage =
+                50 -
+                ((48 * (stakedTime - 10 seconds)) / (170 seconds));
+        }
 
-        stakedBalance[msg.sender] -= amount;
+        uint256 burnAmount = (userStake.amount * burnPercentage) / 100;
+        uint256 transferAmount = userStake.amount - burnAmount;
 
-        emit Unstaked(msg.sender, amount);
+        _burn(msg.sender, userStake.amount);
+
+        gkhanToken.transfer(msg.sender, transferAmount);
+        gkhanToken.burnFrom(msg.sender, burnAmount);
+
+        emit Unstaked(msg.sender, userStake.amount, burnAmount, index);
+
+        userStake.unstaked = true;
     }
 
     // The following functions are overrides required by Solidity.
