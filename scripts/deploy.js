@@ -3,7 +3,7 @@ const { ethers, defender } = require("hardhat");
 const { Verify } = require("../verifyfunc");
 
 async function main() {
-  const Factory = await ethers.getContractFactory("GKHAN");
+  const Factory = await ethers.getContractFactory("");
   const factory = await Factory.deploy();
   await factory.waitForDeployment();
 
